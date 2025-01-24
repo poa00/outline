@@ -17,10 +17,19 @@ import {
 import { toast } from "sonner";
 import styled from "styled-components";
 import breakpoint from "styled-components-breakpoint";
+import { EditorStyleHelper } from "@shared/editor/styles/EditorStyleHelper";
 import { s } from "@shared/styles";
-import { NavigationNode } from "@shared/types";
-import { ProsemirrorHelper, Heading } from "@shared/utils/ProsemirrorHelper";
+import {
+  IconType,
+  NavigationNode,
+  TOCPosition,
+  TeamPreference,
+} from "@shared/types";
+import { ProsemirrorHelper } from "@shared/utils/ProsemirrorHelper";
+import { TextHelper } from "@shared/utils/TextHelper";
 import { parseDomain } from "@shared/utils/domains";
+import { determineIconType } from "@shared/utils/icon";
+import { isModKey } from "@shared/utils/keyboard";
 import RootStore from "~/stores/RootStore";
 import Document from "~/models/Document";
 import Revision from "~/models/Revision";
@@ -29,18 +38,16 @@ import DocumentPublish from "~/scenes/DocumentPublish";
 import Branding from "~/components/Branding";
 import ConnectionStatus from "~/components/ConnectionStatus";
 import ErrorBoundary from "~/components/ErrorBoundary";
-import Flex from "~/components/Flex";
 import LoadingIndicator from "~/components/LoadingIndicator";
 import PageTitle from "~/components/PageTitle";
 import PlaceholderDocument from "~/components/PlaceholderDocument";
 import RegisterKeyDown from "~/components/RegisterKeyDown";
+import { SidebarContextType } from "~/components/Sidebar/components/SidebarContext";
 import withStores from "~/components/withStores";
 import type { Editor as TEditor } from "~/editor";
-import { SearchResult } from "~/editor/components/LinkEditor";
+import { Properties } from "~/types";
 import { client } from "~/utils/ApiClient";
-import { replaceTitleVariables } from "~/utils/date";
 import { emojiToUrl } from "~/utils/emoji";
-import { isModKey } from "~/utils/keyboard";
 
 import {
   documentHistoryPath,
@@ -52,7 +59,6 @@ import Contents from "./Contents";
 import Editor from "./Editor";
 import Header from "./Header";
 import KeyboardShortcutsButton from "./KeyboardShortcutsButton";
-import MarkAsViewed from "./MarkAsViewed";
 import { MeasuredContainer } from "./MeasuredContainer";
 import Notices from "./Notices";
 import PublicReferences from "./PublicReferences";
@@ -71,6 +77,7 @@ type LocationState = {
   title?: string;
   restore?: boolean;
   revisionId?: string;
+  sidebarContext?: SidebarContextType;
 };
 
 type Props = WithTranslation &
@@ -82,8 +89,11 @@ type Props = WithTranslation &
     revision?: Revision;
     readOnly: boolean;
     shareId?: string;
-    onCreateLink?: (title: string, nested?: boolean) => Promise<string>;
-    onSearchLink?: (term: string) => Promise<SearchResult[]>;
+    tocPosition?: TOCPosition | false;
+    onCreateLink?: (
+      params: Properties<Document>,
+      nested?: boolean
+    ) => Promise<string>;
   };
 
 @observer
@@ -109,9 +119,6 @@ class DocumentScene extends React.Component<Props> {
   @observable
   title: string = this.props.document.title;
 
-  @observable
-  headings: Heading[] = [];
-
   componentDidMount() {
     this.updateIsDirty();
   }
@@ -132,6 +139,10 @@ class DocumentScene extends React.Component<Props> {
       this.props.document.isPersistedOnce
     ) {
       void this.props.document.delete();
+    } else if (this.props.document.isDirty()) {
+      void this.props.document.save(undefined, {
+        autosave: true,
+      });
     }
   }
 
@@ -143,7 +154,13 @@ class DocumentScene extends React.Component<Props> {
     }
 
     const { view, schema } = editorRef;
-    const doc = Node.fromJSON(schema, template.data);
+    const doc = Node.fromJSON(
+      schema,
+      ProsemirrorHelper.replaceTemplateVariables(
+        template.data,
+        this.props.auth.user!
+      )
+    );
 
     if (doc) {
       view.dispatch(
@@ -160,15 +177,18 @@ class DocumentScene extends React.Component<Props> {
     }
 
     if (!this.title) {
-      const title = replaceTitleVariables(
+      const title = TextHelper.replaceTemplateVariables(
         template.title,
-        this.props.auth.user || undefined
+        this.props.auth.user!
       );
       this.title = title;
       this.props.document.title = title;
     }
-    if (template.emoji) {
-      this.props.document.emoji = template.emoji;
+    if (template.icon) {
+      this.props.document.icon = template.icon;
+    }
+    if (template.color) {
+      this.props.document.color = template.color;
     }
 
     this.props.document.data = cloneDeep(template.data);
@@ -204,13 +224,15 @@ class DocumentScene extends React.Component<Props> {
 
   onUndoRedo = (event: KeyboardEvent) => {
     if (isModKey(event)) {
+      event.preventDefault();
+
       if (event.shiftKey) {
-        if (this.editor.current?.redo()) {
-          event.preventDefault();
+        if (!this.props.readOnly) {
+          this.editor.current?.commands.redo();
         }
       } else {
-        if (this.editor.current?.undo()) {
-          event.preventDefault();
+        if (!this.props.readOnly) {
+          this.editor.current?.commands.undo();
         }
       }
     }
@@ -228,14 +250,19 @@ class DocumentScene extends React.Component<Props> {
   };
 
   goToEdit = (ev: KeyboardEvent) => {
-    if (!this.props.readOnly) {
-      return;
-    }
-    ev.preventDefault();
-    const { document, abilities } = this.props;
+    if (this.props.readOnly) {
+      ev.preventDefault();
+      const { document, abilities } = this.props;
 
-    if (abilities.update) {
-      this.props.history.push(documentEditPath(document));
+      if (abilities.update) {
+        this.props.history.push({
+          pathname: documentEditPath(document),
+          state: { sidebarContext: this.props.location.state?.sidebarContext },
+        });
+      }
+    } else if (this.editor.current?.isBlurred) {
+      ev.preventDefault();
+      this.editor.current?.focus();
     }
   };
 
@@ -250,9 +277,15 @@ class DocumentScene extends React.Component<Props> {
     const { document, location } = this.props;
 
     if (location.pathname.endsWith("history")) {
-      this.props.history.push(document.url);
+      this.props.history.push({
+        pathname: document.url,
+        state: { sidebarContext: this.props.location.state?.sidebarContext },
+      });
     } else {
-      this.props.history.push(documentHistoryPath(document));
+      this.props.history.push({
+        pathname: documentHistoryPath(document),
+        state: { sidebarContext: this.props.location.state?.sidebarContext },
+      });
     }
   };
 
@@ -318,10 +351,16 @@ class DocumentScene extends React.Component<Props> {
       this.isEditorDirty = false;
 
       if (options.done) {
-        this.props.history.push(savedDocument.url);
+        this.props.history.push({
+          pathname: savedDocument.url,
+          state: { sidebarContext: this.props.location.state?.sidebarContext },
+        });
         this.props.ui.setActiveDocument(savedDocument);
       } else if (document.isNew) {
-        this.props.history.push(documentEditPath(savedDocument));
+        this.props.history.push({
+          pathname: documentEditPath(savedDocument),
+          state: { sidebarContext: this.props.location.state?.sidebarContext },
+        });
         this.props.ui.setActiveDocument(savedDocument);
       }
     } catch (err) {
@@ -360,20 +399,6 @@ class DocumentScene extends React.Component<Props> {
     this.isUploading = false;
   };
 
-  handleChange = () => {
-    const { document } = this.props;
-
-    // Keep derived task list in sync
-    const tasks = this.editor.current?.getTasks();
-    const total = tasks?.length ?? 0;
-    const completed = tasks?.filter((t) => t.completed).length ?? 0;
-    document.updateTasks(total, completed);
-  };
-
-  onHeadingsChange = (headings: Heading[]) => {
-    this.headings = headings;
-  };
-
   handleChangeTitle = action((value: string) => {
     this.title = value;
     this.props.document.title = value;
@@ -381,35 +406,59 @@ class DocumentScene extends React.Component<Props> {
     void this.autosave();
   });
 
-  handleChangeEmoji = action((value: string) => {
-    this.props.document.emoji = value;
-    this.updateIsDirty();
-    void this.autosave();
+  handleChangeIcon = action((icon: string | null, color: string | null) => {
+    this.props.document.icon = icon;
+    this.props.document.color = color;
+    void this.onSave();
   });
 
   goBack = () => {
     if (!this.props.readOnly) {
-      this.props.history.push(this.props.document.url);
+      this.props.history.push({
+        pathname: this.props.document.url,
+        state: { sidebarContext: this.props.location.state?.sidebarContext },
+      });
     }
   };
 
   render() {
-    const { document, revision, readOnly, abilities, auth, ui, shareId, t } =
-      this.props;
+    const {
+      document,
+      revision,
+      readOnly,
+      abilities,
+      auth,
+      ui,
+      shareId,
+      tocPosition,
+      t,
+    } = this.props;
     const { team, user } = auth;
     const isShare = !!shareId;
     const embedsDisabled =
       (team && team.documentEmbeds === false) || document.embedsDisabled;
 
-    const hasHeadings = this.headings.length > 0;
+    const tocPos =
+      tocPosition ??
+      ((team?.getPreference(TeamPreference.TocPosition) as TOCPosition) ||
+        TOCPosition.Left);
     const showContents =
-      ui.tocVisible && ((readOnly && hasHeadings) || !readOnly);
+      tocPos &&
+      (isShare
+        ? ui.tocVisible !== false
+        : !document.isTemplate && ui.tocVisible === true);
     const multiplayerEditor =
       !document.isArchived && !document.isDeleted && !revision && !isShare;
 
     const canonicalUrl = shareId
       ? this.props.match.url
       : updateDocumentPath(this.props.match.url, document);
+
+    const hasEmojiInTitle = determineIconType(document.icon) === IconType.Emoji;
+    const title = hasEmojiInTitle
+      ? document.titleWithDefault.replace(document.icon!, "")
+      : document.titleWithDefault;
+    const favicon = hasEmojiInTitle ? emojiToUrl(document.icon!) : undefined;
 
     return (
       <ErrorBoundary showTitle>
@@ -445,12 +494,9 @@ class DocumentScene extends React.Component<Props> {
           column
           auto
         >
-          <PageTitle
-            title={document.titleWithDefault.replace(document.emoji || "", "")}
-            favicon={document.emoji ? emojiToUrl(document.emoji) : undefined}
-          />
+          <PageTitle title={title} favicon={favicon} />
           {(this.isUploading || this.isSaving) && <LoadingIndicator />}
-          <Container justify="center" column auto>
+          <Container column>
             {!readOnly && (
               <Prompt
                 when={this.isUploading && !this.isEditorDirty}
@@ -461,7 +507,6 @@ class DocumentScene extends React.Component<Props> {
             )}
             <Header
               document={document}
-              documentHasHeadings={hasHeadings}
               revision={revision}
               shareId={shareId}
               isDraft={document.isDraft}
@@ -475,29 +520,46 @@ class DocumentScene extends React.Component<Props> {
               sharedTree={this.props.sharedTree}
               onSelectTemplate={this.replaceDocument}
               onSave={this.onSave}
-              headings={this.headings}
             />
-            <MeasuredContainer
-              as={MaxWidth}
-              name="document"
-              archived={document.isArchived}
-              showContents={showContents}
-              isEditing={!readOnly}
-              isFullWidth={document.fullWidth}
-              column
-              auto
-            >
-              <Notices document={document} readOnly={readOnly} />
-              <React.Suspense fallback={<PlaceholderDocument />}>
-                <Flex auto={!readOnly} reverse>
-                  {revision ? (
+            <Main fullWidth={document.fullWidth} tocPosition={tocPos}>
+              <React.Suspense
+                fallback={
+                  <EditorContainer
+                    docFullWidth={document.fullWidth}
+                    showContents={showContents}
+                    tocPosition={tocPos}
+                  >
+                    <PlaceholderDocument />
+                  </EditorContainer>
+                }
+              >
+                {revision ? (
+                  <RevisionContainer docFullWidth={document.fullWidth}>
                     <RevisionViewer
                       document={document}
                       revision={revision}
                       id={revision.id}
                     />
-                  ) : (
-                    <>
+                  </RevisionContainer>
+                ) : (
+                  <>
+                    {showContents && (
+                      <ContentsContainer
+                        docFullWidth={document.fullWidth}
+                        position={tocPos}
+                      >
+                        <Contents />
+                      </ContentsContainer>
+                    )}
+                    <MeasuredContainer
+                      name="document"
+                      as={EditorContainer}
+                      docFullWidth={document.fullWidth}
+                      showContents={showContents}
+                      tocPosition={tocPos}
+                    >
+                      <Notices document={document} readOnly={readOnly} />
+
                       <Editor
                         id={document.id}
                         key={embedsDisabled ? "disabled" : "enabled"}
@@ -513,12 +575,9 @@ class DocumentScene extends React.Component<Props> {
                         onSynced={this.onSynced}
                         onFileUploadStart={this.onFileUploadStart}
                         onFileUploadStop={this.onFileUploadStop}
-                        onSearchLink={this.props.onSearchLink}
                         onCreateLink={this.props.onCreateLink}
                         onChangeTitle={this.handleChangeTitle}
-                        onChangeEmoji={this.handleChangeEmoji}
-                        onChange={this.handleChange}
-                        onHeadingsChange={this.onHeadingsChange}
+                        onChangeIcon={this.handleChangeIcon}
                         onSave={this.onSave}
                         onPublish={this.onPublish}
                         onCancel={this.goBack}
@@ -526,7 +585,7 @@ class DocumentScene extends React.Component<Props> {
                         canUpdate={abilities.update}
                         canComment={abilities.comment}
                       >
-                        {shareId && (
+                        {shareId ? (
                           <ReferencesWrapper>
                             <PublicReferences
                               shareId={shareId}
@@ -534,28 +593,17 @@ class DocumentScene extends React.Component<Props> {
                               sharedTree={this.props.sharedTree}
                             />
                           </ReferencesWrapper>
-                        )}
-                        {!isShare && !revision && (
-                          <>
-                            <MarkAsViewed document={document} />
-                            <ReferencesWrapper>
-                              <References document={document} />
-                            </ReferencesWrapper>
-                          </>
-                        )}
+                        ) : !revision ? (
+                          <ReferencesWrapper>
+                            <References document={document} />
+                          </ReferencesWrapper>
+                        ) : null}
                       </Editor>
-
-                      {showContents && (
-                        <Contents
-                          headings={this.headings}
-                          isFullWidth={document.fullWidth}
-                        />
-                      )}
-                    </>
-                  )}
-                </Flex>
+                    </MeasuredContainer>
+                  </>
+                )}
               </React.Suspense>
-            </MeasuredContainer>
+            </Main>
             {isShare &&
               !parseDomain(window.location.origin).custom &&
               !auth.user && (
@@ -574,6 +622,95 @@ class DocumentScene extends React.Component<Props> {
   }
 }
 
+type MainProps = {
+  fullWidth: boolean;
+  tocPosition: TOCPosition | false;
+};
+
+const Main = styled.div<MainProps>`
+  margin-top: 4px;
+
+  ${breakpoint("tablet")`
+    display: grid;
+    grid-template-columns: ${({ fullWidth, tocPosition }: MainProps) =>
+      fullWidth
+        ? tocPosition === TOCPosition.Left
+          ? `${EditorStyleHelper.tocWidth}px minmax(0, 1fr)`
+          : `minmax(0, 1fr) ${EditorStyleHelper.tocWidth}px`
+        : `1fr minmax(0, ${`calc(46em + 88px)`}) 1fr`};
+  `};
+
+  ${breakpoint("desktopLarge")`
+    grid-template-columns: ${({ fullWidth, tocPosition }: MainProps) =>
+      fullWidth
+        ? tocPosition === TOCPosition.Left
+          ? `${EditorStyleHelper.tocWidth}px minmax(0, 1fr)`
+          : `minmax(0, 1fr) ${EditorStyleHelper.tocWidth}px`
+        : `1fr minmax(0, ${`calc(52em + 88px)`}) 1fr`};
+  `};
+`;
+
+type ContentsContainerProps = {
+  docFullWidth: boolean;
+  position: TOCPosition | false;
+};
+
+const ContentsContainer = styled.div<ContentsContainerProps>`
+  ${breakpoint("tablet")`
+    margin-top: calc(44px + 6vh);
+
+    grid-row: 1;
+    grid-column: ${({ docFullWidth, position }: ContentsContainerProps) =>
+      position === TOCPosition.Left ? 1 : docFullWidth ? 2 : 3};
+    justify-self: ${({ position }: ContentsContainerProps) =>
+      position === TOCPosition.Left ? "end" : "start"};
+  `};
+`;
+
+type EditorContainerProps = {
+  docFullWidth: boolean;
+  showContents: boolean;
+  tocPosition: TOCPosition | false;
+};
+
+const EditorContainer = styled.div<EditorContainerProps>`
+  // Adds space to the gutter to make room for icon & heading annotations
+  padding: 0 44px;
+
+  ${breakpoint("tablet")`
+    grid-row: 1;
+
+    // Decides the editor column position & span
+    grid-column: ${({
+      docFullWidth,
+      showContents,
+      tocPosition,
+    }: EditorContainerProps) =>
+      docFullWidth
+        ? showContents
+          ? tocPosition === TOCPosition.Left
+            ? 2
+            : 1
+          : "1 / -1"
+        : 2};
+  `};
+`;
+
+type RevisionContainerProps = {
+  docFullWidth: boolean;
+};
+
+const RevisionContainer = styled.div<RevisionContainerProps>`
+  // Adds space to the gutter to make room for icon
+  padding: 0 40px;
+
+  ${breakpoint("tablet")`
+    grid-row: 1;
+    grid-column: ${({ docFullWidth }: RevisionContainerProps) =>
+      docFullWidth ? "1 / -1" : 2};
+  `}
+`;
+
 const Footer = styled.div`
   position: absolute;
   width: 100%;
@@ -585,7 +722,6 @@ const Footer = styled.div`
 const Background = styled(Container)`
   position: relative;
   background: ${s("background")};
-  transition: ${s("backgroundTransition")};
 `;
 
 const ReferencesWrapper = styled.div`
@@ -594,36 +730,6 @@ const ReferencesWrapper = styled.div`
   @media print {
     display: none;
   }
-`;
-
-type MaxWidthProps = {
-  isEditing?: boolean;
-  isFullWidth?: boolean;
-  archived?: boolean;
-  showContents?: boolean;
-};
-
-const MaxWidth = styled(Flex)<MaxWidthProps>`
-  // Adds space to the gutter to make room for heading annotations
-  padding: 0 32px;
-  transition: padding 100ms;
-  max-width: 100vw;
-  width: 100%;
-
-  padding-bottom: 16px;
-
-  ${breakpoint("tablet")`
-    margin: 4px auto 12px;
-    max-width: ${(props: MaxWidthProps) =>
-      props.isFullWidth
-        ? "100vw"
-        : `calc(64px + 46em + ${props.showContents ? "256px" : "0px"});`}
-  `};
-
-  ${breakpoint("desktopLarge")`
-    max-width: ${(props: MaxWidthProps) =>
-      props.isFullWidth ? "100vw" : `calc(64px + 52em);`}
-  `};
 `;
 
 export default withTranslation()(withStores(withRouter(DocumentScene)));

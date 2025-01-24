@@ -28,10 +28,6 @@ export default class S3Storage extends BaseStorage {
     this.client = new S3Client({
       bucketEndpoint: env.AWS_S3_ACCELERATE_URL ? true : false,
       forcePathStyle: env.AWS_S3_FORCE_PATH_STYLE,
-      credentials: {
-        accessKeyId: env.AWS_ACCESS_KEY_ID || "",
-        secretAccessKey: env.AWS_SECRET_ACCESS_KEY || "",
-      },
       region: env.AWS_REGION,
       endpoint: this.getEndpoint(),
     });
@@ -149,14 +145,13 @@ export default class S3Storage extends BaseStorage {
     const params = {
       Bucket: this.getBucket(),
       Key: key,
-      Expires: expiresIn,
     };
 
     if (isDocker) {
       return `${this.getPublicEndpoint()}/${key}`;
     } else {
       const command = new GetObjectCommand(params);
-      const url = await getSignedUrl(this.client, command);
+      const url = await getSignedUrl(this.client, command, { expiresIn });
 
       if (env.AWS_S3_ACCELERATE_URL) {
         return url.replace(
@@ -191,9 +186,9 @@ export default class S3Storage extends BaseStorage {
           }
 
           stream
-            .on("error", (err) => {
+            .on("error", (error) => {
               dest.end();
-              reject(err);
+              reject(error);
             })
             .pipe(dest);
         });
@@ -235,6 +230,9 @@ export default class S3Storage extends BaseStorage {
     if (env.AWS_S3_UPLOAD_BUCKET_NAME) {
       const url = new URL(env.AWS_S3_UPLOAD_BUCKET_URL);
       if (url.hostname.startsWith(env.AWS_S3_UPLOAD_BUCKET_NAME + ".")) {
+        Logger.warn(
+          "AWS_S3_UPLOAD_BUCKET_URL contains the bucket name, this configuration combination will always point to AWS.\nRename your bucket or hostname if not using AWS S3.\nSee: https://github.com/outline/outline/issues/8025"
+        );
         return undefined;
       }
     }

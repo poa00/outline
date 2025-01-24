@@ -17,10 +17,14 @@ import {
   addRowAndMoveSelection,
   setColumnAttr,
   createTable,
+  exportTable,
   sortTable,
   setTableAttr,
+  deleteColSelection,
+  deleteRowSelection,
 } from "../commands/table";
 import { MarkdownSerializerState } from "../lib/markdown/serializer";
+import { FixTablesPlugin } from "../plugins/FixTables";
 import tablesRule from "../rules/tables";
 import { EditorStyleHelper } from "../styles/EditorStyleHelper";
 import { TableLayout } from "../types";
@@ -76,6 +80,7 @@ export default class Table extends Node {
       addRowAfter: () => addRowAfter,
       deleteRow: () => deleteRow,
       deleteTable: () => deleteTable,
+      exportTable,
       toggleHeaderColumn: () => toggleHeader("column"),
       toggleHeaderRow: () => toggleHeader("row"),
     };
@@ -86,6 +91,10 @@ export default class Table extends Node {
       Tab: chainCommands(goToNextCell(1), addRowAndMoveSelection()),
       "Shift-Tab": goToNextCell(-1),
       "Mod-Enter": addRowAndMoveSelection(),
+      "Mod-Backspace": chainCommands(
+        deleteColSelection(),
+        deleteRowSelection()
+      ),
     };
   }
 
@@ -103,9 +112,9 @@ export default class Table extends Node {
       // Note: Important to register columnResizing before tableEditing
       columnResizing({
         View: TableView,
-        lastColumnResizable: false,
       }),
       tableEditing(),
+      new FixTablesPlugin(),
     ];
   }
 }

@@ -1,10 +1,9 @@
+import { createContext } from "@server/context";
 import { sequelize } from "@server/storage/database";
 import { buildDocument, buildUser } from "@server/test/factories";
 import documentDuplicator from "./documentDuplicator";
 
 describe("documentDuplicator", () => {
-  const ip = "127.0.0.1";
-
   it("should duplicate existing document", async () => {
     const user = await buildUser();
     const original = await buildDocument({
@@ -16,16 +15,16 @@ describe("documentDuplicator", () => {
       documentDuplicator({
         document: original,
         collection: original.collection,
-        transaction,
         user,
-        ip,
+        ctx: createContext({ user, transaction }),
       })
     );
 
     expect(response).toHaveLength(1);
     expect(response[0].title).toEqual(original.title);
     expect(response[0].text).toEqual(original.text);
-    expect(response[0].emoji).toEqual(original.emoji);
+    expect(response[0].icon).toEqual(original.icon);
+    expect(response[0].color).toEqual(original.color);
     expect(response[0].publishedAt).toBeInstanceOf(Date);
   });
 
@@ -34,7 +33,7 @@ describe("documentDuplicator", () => {
     const original = await buildDocument({
       userId: user.id,
       teamId: user.teamId,
-      emoji: "👋",
+      icon: "👋",
     });
 
     const response = await sequelize.transaction((transaction) =>
@@ -42,16 +41,16 @@ describe("documentDuplicator", () => {
         document: original,
         collection: original.collection,
         title: "New title",
-        transaction,
         user,
-        ip,
+        ctx: createContext({ user, transaction }),
       })
     );
 
     expect(response).toHaveLength(1);
     expect(response[0].title).toEqual("New title");
     expect(response[0].text).toEqual(original.text);
-    expect(response[0].emoji).toEqual(original.emoji);
+    expect(response[0].icon).toEqual(original.icon);
+    expect(response[0].color).toEqual(original.color);
     expect(response[0].publishedAt).toBeInstanceOf(Date);
   });
 
@@ -60,7 +59,7 @@ describe("documentDuplicator", () => {
     const original = await buildDocument({
       userId: user.id,
       teamId: user.teamId,
-      emoji: "👋",
+      icon: "👋",
     });
 
     await buildDocument({
@@ -75,9 +74,8 @@ describe("documentDuplicator", () => {
         document: original,
         collection: original.collection,
         user,
-        transaction,
         recursive: true,
-        ip,
+        ctx: createContext({ user, transaction }),
       })
     );
 
@@ -95,17 +93,17 @@ describe("documentDuplicator", () => {
       documentDuplicator({
         document: original,
         collection: original.collection,
-        transaction,
         publish: false,
         user,
-        ip,
+        ctx: createContext({ user, transaction }),
       })
     );
 
     expect(response).toHaveLength(1);
     expect(response[0].title).toEqual(original.title);
     expect(response[0].text).toEqual(original.text);
-    expect(response[0].emoji).toEqual(original.emoji);
+    expect(response[0].icon).toEqual(original.icon);
+    expect(response[0].color).toEqual(original.color);
     expect(response[0].publishedAt).toBeNull();
   });
 });

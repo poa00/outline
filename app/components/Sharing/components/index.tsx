@@ -1,9 +1,8 @@
 import { darken } from "polished";
 import styled from "styled-components";
 import Flex from "@shared/components/Flex";
-import { s } from "@shared/styles";
+import { s, hover } from "@shared/styles";
 import NudeButton from "~/components/NudeButton";
-import { hover } from "~/styles";
 
 // TODO: Temp until Button/NudeButton styles are normalized
 export const Wrapper = styled.div`
@@ -15,7 +14,7 @@ export const Wrapper = styled.div`
 
 export const Separator = styled.div`
   border-top: 1px dashed ${s("divider")};
-  margin: 12px 0;
+  margin: 8px 0;
 `;
 
 export const HeaderInput = styled(Flex)`

@@ -20,11 +20,16 @@ import {
 } from "outline-icons";
 import { EditorState } from "prosemirror-state";
 import * as React from "react";
-import isInCode from "@shared/editor/queries/isInCode";
-import isInList from "@shared/editor/queries/isInList";
-import isMarkActive from "@shared/editor/queries/isMarkActive";
-import isNodeActive from "@shared/editor/queries/isNodeActive";
+import styled from "styled-components";
+import Highlight from "@shared/editor/marks/Highlight";
+import { getMarksBetween } from "@shared/editor/queries/getMarksBetween";
+import { isInCode } from "@shared/editor/queries/isInCode";
+import { isInList } from "@shared/editor/queries/isInList";
+import { isMarkActive } from "@shared/editor/queries/isMarkActive";
+import { isNodeActive } from "@shared/editor/queries/isNodeActive";
 import { MenuItem } from "@shared/editor/types";
+import { metaDisplay } from "@shared/utils/keyboard";
+import CircleIcon from "~/components/Icons/CircleIcon";
 import { Dictionary } from "~/hooks/useDictionary";
 
 export default function formattingMenuItems(
@@ -34,10 +39,15 @@ export default function formattingMenuItems(
   dictionary: Dictionary
 ): MenuItem[] {
   const { schema } = state;
-  const isList = isInList(state);
   const isCode = isInCode(state);
   const isCodeBlock = isInCode(state, { onlyBlock: true });
   const isEmpty = state.selection.empty;
+
+  const highlight = getMarksBetween(
+    state.selection.from,
+    state.selection.to,
+    state
+  ).find(({ mark }) => mark.type.name === "highlight");
 
   return [
     {
@@ -54,6 +64,7 @@ export default function formattingMenuItems(
     {
       name: "strong",
       tooltip: dictionary.strong,
+      shortcut: `${metaDisplay}+B`,
       icon: <BoldIcon />,
       active: isMarkActive(schema.marks.strong),
       visible: !isCode && (!isMobile || !isEmpty),
@@ -61,6 +72,7 @@ export default function formattingMenuItems(
     {
       name: "em",
       tooltip: dictionary.em,
+      shortcut: `${metaDisplay}+I`,
       icon: <ItalicIcon />,
       active: isMarkActive(schema.marks.em),
       visible: !isCode && (!isMobile || !isEmpty),
@@ -68,20 +80,46 @@ export default function formattingMenuItems(
     {
       name: "strikethrough",
       tooltip: dictionary.strikethrough,
+      shortcut: `${metaDisplay}+D`,
       icon: <StrikethroughIcon />,
       active: isMarkActive(schema.marks.strikethrough),
       visible: !isCode && (!isMobile || !isEmpty),
     },
     {
-      name: "highlight",
       tooltip: dictionary.mark,
-      icon: <HighlightIcon />,
-      active: isMarkActive(schema.marks.highlight),
+      shortcut: `${metaDisplay}+Ctrl+H`,
+      icon: highlight ? (
+        <CircleIcon color={highlight.mark.attrs.color || Highlight.colors[0]} />
+      ) : (
+        <HighlightIcon />
+      ),
+      active: () => !!highlight,
       visible: !isCode && (!isMobile || !isEmpty),
+      children: [
+        ...(highlight
+          ? [
+              {
+                name: "highlight",
+                label: dictionary.none,
+                icon: <DottedCircleIcon retainColor color="transparent" />,
+                active: () => false,
+                attrs: { color: highlight.mark.attrs.color },
+              },
+            ]
+          : []),
+        ...Highlight.colors.map((color, index) => ({
+          name: "highlight",
+          label: Highlight.colorNames[index],
+          icon: <CircleIcon retainColor color={color} />,
+          active: isMarkActive(schema.marks.highlight, { color }),
+          attrs: { color },
+        })),
+      ],
     },
     {
       name: "code_inline",
       tooltip: dictionary.codeInline,
+      shortcut: `${metaDisplay}+E`,
       icon: <CodeIcon />,
       active: isMarkActive(schema.marks.code_inline),
       visible: !isCodeBlock && (!isMobile || !isEmpty),
@@ -93,6 +131,7 @@ export default function formattingMenuItems(
     {
       name: "heading",
       tooltip: dictionary.heading,
+      shortcut: `⇧+Ctrl+1`,
       icon: <Heading1Icon />,
       active: isNodeActive(schema.nodes.heading, { level: 1 }),
       attrs: { level: 1 },
@@ -101,6 +140,7 @@ export default function formattingMenuItems(
     {
       name: "heading",
       tooltip: dictionary.subheading,
+      shortcut: `⇧+Ctrl+2`,
       icon: <Heading2Icon />,
       active: isNodeActive(schema.nodes.heading, { level: 2 }),
       attrs: { level: 2 },
@@ -109,6 +149,7 @@ export default function formattingMenuItems(
     {
       name: "heading",
       tooltip: dictionary.subheading,
+      shortcut: `⇧+Ctrl+3`,
       icon: <Heading3Icon />,
       active: isNodeActive(schema.nodes.heading, { level: 3 }),
       attrs: { level: 3 },
@@ -117,6 +158,7 @@ export default function formattingMenuItems(
     {
       name: "blockquote",
       tooltip: dictionary.quote,
+      shortcut: `${metaDisplay}+]`,
       icon: <BlockQuoteIcon />,
       active: isNodeActive(schema.nodes.blockquote),
       attrs: { level: 2 },
@@ -129,6 +171,7 @@ export default function formattingMenuItems(
     {
       name: "checkbox_list",
       tooltip: dictionary.checkboxList,
+      shortcut: `⇧+Ctrl+7`,
       icon: <TodoListIcon />,
       keywords: "checklist checkbox task",
       active: isNodeActive(schema.nodes.checkbox_list),
@@ -137,6 +180,7 @@ export default function formattingMenuItems(
     {
       name: "bullet_list",
       tooltip: dictionary.bulletList,
+      shortcut: `⇧+Ctrl+8`,
       icon: <BulletedListIcon />,
       active: isNodeActive(schema.nodes.bullet_list),
       visible: !isCodeBlock && (!isMobile || isEmpty),
@@ -144,6 +188,7 @@ export default function formattingMenuItems(
     {
       name: "ordered_list",
       tooltip: dictionary.orderedList,
+      shortcut: `⇧+Ctrl+9`,
       icon: <OrderedListIcon />,
       active: isNodeActive(schema.nodes.ordered_list),
       visible: !isCodeBlock && (!isMobile || isEmpty),
@@ -151,14 +196,32 @@ export default function formattingMenuItems(
     {
       name: "outdentList",
       tooltip: dictionary.outdent,
+      shortcut: `⇧+Tab`,
       icon: <OutdentIcon />,
-      visible: isList && isMobile,
+      visible:
+        isMobile && isInList(state, { types: ["ordered_list", "bullet_list"] }),
     },
     {
       name: "indentList",
       tooltip: dictionary.indent,
+      shortcut: `Tab`,
       icon: <IndentIcon />,
-      visible: isList && isMobile,
+      visible:
+        isMobile && isInList(state, { types: ["ordered_list", "bullet_list"] }),
+    },
+    {
+      name: "outdentCheckboxList",
+      tooltip: dictionary.outdent,
+      shortcut: `⇧+Tab`,
+      icon: <OutdentIcon />,
+      visible: isMobile && isInList(state, { types: ["checkbox_list"] }),
+    },
+    {
+      name: "indentCheckboxList",
+      tooltip: dictionary.indent,
+      shortcut: `Tab`,
+      icon: <IndentIcon />,
+      visible: isMobile && isInList(state, { types: ["checkbox_list"] }),
     },
     {
       name: "separator",
@@ -167,17 +230,22 @@ export default function formattingMenuItems(
     {
       name: "link",
       tooltip: dictionary.createLink,
+      shortcut: `${metaDisplay}+K`,
       icon: <LinkIcon />,
-      active: isMarkActive(schema.marks.link),
       attrs: { href: "" },
       visible: !isCodeBlock && (!isMobile || !isEmpty),
     },
     {
       name: "comment",
       tooltip: dictionary.comment,
+      shortcut: `${metaDisplay}+⌥+M`,
       icon: <CommentIcon />,
       label: isCodeBlock ? dictionary.comment : undefined,
-      active: isMarkActive(schema.marks.comment),
+      active: isMarkActive(
+        schema.marks.comment,
+        { resolved: false },
+        { exact: true }
+      ),
       visible: !isMobile || !isEmpty,
     },
     {
@@ -188,7 +256,15 @@ export default function formattingMenuItems(
       name: "copyToClipboard",
       icon: <CopyIcon />,
       tooltip: dictionary.copy,
+      shortcut: `${metaDisplay}+C`,
       visible: isCode && !isCodeBlock && (!isMobile || !isEmpty),
     },
   ];
 }
+
+const DottedCircleIcon = styled(CircleIcon)`
+  circle {
+    stroke: ${(props) => props.theme.textSecondary};
+    stroke-dasharray: 2, 2;
+  }
+`;

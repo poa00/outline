@@ -8,7 +8,7 @@ import styled from "styled-components";
 import breakpoint from "styled-components-breakpoint";
 import { v4 as uuidv4 } from "uuid";
 import { Pagination } from "@shared/constants";
-import { hideScrollbars } from "@shared/styles";
+import { hover, hideScrollbars } from "@shared/styles";
 import {
   DateFilter as TDateFilter,
   StatusFilter as TStatusFilter,
@@ -27,7 +27,6 @@ import env from "~/env";
 import usePaginatedRequest from "~/hooks/usePaginatedRequest";
 import useQuery from "~/hooks/useQuery";
 import useStores from "~/hooks/useStores";
-import { hover } from "~/styles";
 import { SearchResult } from "~/types";
 import { searchPath } from "~/utils/routeHelpers";
 import { decodeURIComponentSafe } from "~/utils/urls";
@@ -53,11 +52,14 @@ function Search(props: Props) {
 
   // refs
   const searchInputRef = React.useRef<HTMLInputElement | null>(null);
-  const resultListCompositeRef = React.useRef<HTMLDivElement | null>(null);
-  const recentSearchesCompositeRef = React.useRef<HTMLDivElement | null>(null);
+  const resultListRef = React.useRef<HTMLDivElement | null>(null);
+  const recentSearchesRef = React.useRef<HTMLDivElement | null>(null);
 
   // filters
-  const query = decodeURIComponentSafe(routeMatch.params.term ?? "");
+  const decodedQuery = decodeURIComponentSafe(
+    routeMatch.params.term ?? params.get("query") ?? ""
+  ).trim();
+  const query = decodedQuery !== "" ? decodedQuery : undefined;
   const collectionId = params.get("collectionId") ?? undefined;
   const userId = params.get("userId") ?? undefined;
   const documentId = params.get("documentId") ?? undefined;
@@ -66,7 +68,19 @@ function Search(props: Props) {
     ? (params.getAll("statusFilter") as TStatusFilter[])
     : [TStatusFilter.Published, TStatusFilter.Draft];
   const titleFilter = params.get("titleFilter") === "true";
-  const hasFilters = !!(documentId || collectionId || userId || dateFilter);
+
+  const isSearchable = !!(query || collectionId || userId);
+
+  const document = documentId ? documents.get(documentId) : undefined;
+
+  const filterVisibility = {
+    document: !!document,
+    collection: !document,
+    user: !document || !!(document && query),
+    documentType: isSearchable,
+    date: isSearchable,
+    title: !!query && !document,
+  };
 
   const filters = React.useMemo(
     () => ({
@@ -98,26 +112,31 @@ function Search(props: Props) {
         query,
         createdAt: new Date().toISOString(),
       });
+    }
 
+    if (isSearchable) {
       return async () =>
         titleFilter
-          ? await documents.searchTitles(query, filters)
-          : await documents.search(query, filters);
+          ? await documents.searchTitles(filters)
+          : await documents.search(filters);
     }
 
     return () => Promise.resolve([] as SearchResult[]);
-  }, [query, titleFilter, filters, searches, documents]);
+  }, [query, titleFilter, filters, searches, documents, isSearchable]);
 
-  const { data, next, end, loading } = usePaginatedRequest(requestFn, {
+  const { data, next, end, error, loading } = usePaginatedRequest(requestFn, {
     limit: Pagination.defaultLimit,
   });
-
-  const document = documentId ? documents.get(documentId) : undefined;
 
   const updateLocation = (query: string) => {
     history.replace({
       pathname: searchPath(query),
-      search: location.search,
+      search: queryString.stringify(
+        { ...queryString.parse(location.search), query: undefined },
+        {
+          skipEmptyString: true,
+        }
+      ),
     });
   };
 
@@ -134,7 +153,7 @@ function Search(props: Props) {
     history.replace({
       pathname: location.pathname,
       search: queryString.stringify(
-        { ...queryString.parse(location.search), ...search },
+        { ...queryString.parse(location.search), query: undefined, ...search },
         {
           skipEmptyString: true,
         }
@@ -178,19 +197,9 @@ function Search(props: Props) {
         }
       }
 
-      const firstResultItem = (
-        resultListCompositeRef.current?.querySelectorAll(
-          "[href]"
-        ) as NodeListOf<HTMLAnchorElement>
-      )?.[0];
+      const firstItem = (resultListRef.current?.firstElementChild ??
+        recentSearchesRef.current?.firstElementChild) as HTMLAnchorElement;
 
-      const firstRecentSearchItem = (
-        recentSearchesCompositeRef.current?.querySelectorAll(
-          "li > [href]"
-        ) as NodeListOf<HTMLAnchorElement>
-      )?.[0];
-
-      const firstItem = firstResultItem ?? firstRecentSearchItem;
       firstItem?.focus();
     }
   };
@@ -211,62 +220,91 @@ function Search(props: Props) {
         </div>
       )}
       <ResultsWrapper column auto>
-        <SearchInput
-          key={query ? "search" : "recent"}
-          ref={searchInputRef}
-          placeholder={`${
-            documentId
-              ? t("Search in document")
-              : collectionId
-              ? t("Search in collection")
-              : t("Search")
-          }…`}
-          onKeyDown={handleKeyDown}
-          defaultValue={query}
-        />
+        <form
+          method="GET"
+          action={searchPath()}
+          onSubmit={(ev) => ev.preventDefault()}
+        >
+          <SearchInput
+            name="query"
+            key={query ? "search" : "recent"}
+            ref={searchInputRef}
+            placeholder={`${
+              documentId
+                ? t("Search in document")
+                : collectionId
+                ? t("Search in collection")
+                : t("Search")
+            }…`}
+            onKeyDown={handleKeyDown}
+            defaultValue={query ?? ""}
+          />
 
-        {(query || hasFilters) && (
           <Filters>
-            {document && (
+            {filterVisibility.document && (
               <DocumentFilter
-                document={document}
+                document={document!}
                 onClick={() => {
                   handleFilterChange({ documentId: undefined });
                 }}
               />
             )}
-            <DocumentTypeFilter
-              statusFilter={statusFilter}
-              onSelect={({ statusFilter }) =>
-                handleFilterChange({ statusFilter })
-              }
-            />
-            <CollectionFilter
-              collectionId={collectionId}
-              onSelect={(collectionId) => handleFilterChange({ collectionId })}
-            />
-            <UserFilter
-              userId={userId}
-              onSelect={(userId) => handleFilterChange({ userId })}
-            />
-            <DateFilter
-              dateFilter={dateFilter}
-              onSelect={(dateFilter) => handleFilterChange({ dateFilter })}
-            />
-            <SearchTitlesFilter
-              width={26}
-              height={14}
-              label={t("Search titles only")}
-              onChange={(ev: React.ChangeEvent<HTMLInputElement>) => {
-                handleFilterChange({ titleFilter: ev.target.checked });
-              }}
-              checked={titleFilter}
-            />
+            {filterVisibility.collection && (
+              <CollectionFilter
+                collectionId={collectionId}
+                onSelect={(collectionId) =>
+                  handleFilterChange({ collectionId })
+                }
+              />
+            )}
+            {filterVisibility.user && (
+              <UserFilter
+                userId={userId}
+                onSelect={(userId) => handleFilterChange({ userId })}
+              />
+            )}
+            {filterVisibility.documentType && (
+              <DocumentTypeFilter
+                statusFilter={statusFilter}
+                onSelect={({ statusFilter }) =>
+                  handleFilterChange({ statusFilter })
+                }
+              />
+            )}
+            {filterVisibility.date && (
+              <DateFilter
+                dateFilter={dateFilter}
+                onSelect={(dateFilter) => handleFilterChange({ dateFilter })}
+              />
+            )}
+            {filterVisibility.title && (
+              <SearchTitlesFilter
+                width={26}
+                height={14}
+                label={t("Search titles only")}
+                onChange={(ev: React.ChangeEvent<HTMLInputElement>) => {
+                  handleFilterChange({ titleFilter: ev.target.checked });
+                }}
+                checked={titleFilter}
+              />
+            )}
           </Filters>
-        )}
-        {query ? (
+        </form>
+        {isSearchable ? (
           <>
-            {showEmpty && (
+            {error ? (
+              <Fade>
+                <Centered column>
+                  <Text as="h1">{t("Something went wrong")}</Text>
+                  <Text as="p" type="secondary">
+                    {t(
+                      "Please try again or contact support if the problem persists"
+                    )}
+                    .
+                  </Text>
+                </Centered>
+              </Fade>
+            ) : showEmpty ? (
               <Fade>
                 <Centered column>
                   <Text as="p" type="secondary">
@@ -274,15 +312,16 @@ function Search(props: Props) {
                   </Text>
                 </Centered>
               </Fade>
-            )}
+            ) : null}
             <ResultList column>
               <StyledArrowKeyNavigation
-                ref={resultListCompositeRef}
+                ref={resultListRef}
                 onEscape={handleEscape}
                 aria-label={t("Search Results")}
+                items={data ?? []}
               >
-                {(compositeProps) =>
-                  data?.length
+                {() =>
+                  data?.length && !error
                     ? data.map((result) => (
                         <DocumentListItem
                           key={result.document.id}
@@ -291,7 +330,6 @@ function Search(props: Props) {
                           context={result.context}
                           showCollection
                           showTemplate
-                          {...compositeProps}
                         />
                       ))
                     : null
@@ -304,11 +342,8 @@ function Search(props: Props) {
               />
             </ResultList>
           </>
-        ) : documentId || collectionId ? null : (
-          <RecentSearches
-            ref={recentSearchesCompositeRef}
-            onEscape={handleEscape}
-          />
+        ) : documentId ? null : (
+          <RecentSearches ref={recentSearchesRef} onEscape={handleEscape} />
         )}
       </ResultsWrapper>
     </Scene>

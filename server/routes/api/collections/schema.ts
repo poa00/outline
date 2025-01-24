@@ -1,20 +1,14 @@
 import isUndefined from "lodash/isUndefined";
 import { z } from "zod";
-import { randomElement } from "@shared/random";
-import { CollectionPermission, FileOperationFormat } from "@shared/types";
-import { IconLibrary } from "@shared/utils/IconLibrary";
-import { colorPalette } from "@shared/utils/collections";
+import {
+  CollectionPermission,
+  CollectionStatusFilter,
+  FileOperationFormat,
+} from "@shared/types";
 import { Collection } from "@server/models";
+import { zodIconType } from "@server/utils/zod";
 import { ValidateColor, ValidateIndex } from "@server/validation";
 import { BaseSchema, ProsemirrorSchema } from "../schema";
-
-function zodEnumFromObjectKeys<
-  TI extends Record<string, any>,
-  R extends string = TI extends Record<infer R, any> ? R : never
->(input: TI): z.ZodEnum<[R, ...R[]]> {
-  const [firstKey, ...otherKeys] = Object.keys(input) as [R, ...R[]];
-  return z.enum([firstKey, ...otherKeys]);
-}
 
 const BaseIdSchema = z.object({
   /** Id of the collection to be updated */
@@ -27,15 +21,15 @@ export const CollectionsCreateSchema = BaseSchema.extend({
     color: z
       .string()
       .regex(ValidateColor.regex, { message: ValidateColor.message })
-      .default(randomElement(colorPalette)),
+      .nullish(),
     description: z.string().nullish(),
-    data: ProsemirrorSchema.nullish(),
+    data: ProsemirrorSchema({ allowEmpty: true }).nullish(),
     permission: z
       .nativeEnum(CollectionPermission)
       .nullish()
       .transform((val) => (isUndefined(val) ? null : val)),
     sharing: z.boolean().default(true),
-    icon: zodEnumFromObjectKeys(IconLibrary.mapping).optional(),
+    icon: zodIconType().optional(),
     sort: z
       .object({
         field: z.union([z.literal("title"), z.literal("index")]),
@@ -104,17 +98,6 @@ export type CollectionsRemoveGroupReq = z.infer<
   typeof CollectionsRemoveGroupSchema
 >;
 
-export const CollectionsGroupMembershipsSchema = BaseSchema.extend({
-  body: BaseIdSchema.extend({
-    query: z.string().optional(),
-    permission: z.nativeEnum(CollectionPermission).optional(),
-  }),
-});
-
-export type CollectionsGroupMembershipsReq = z.infer<
-  typeof CollectionsGroupMembershipsSchema
->;
-
 export const CollectionsAddUserSchema = BaseSchema.extend({
   body: BaseIdSchema.extend({
     userId: z.string().uuid(),
@@ -173,8 +156,8 @@ export const CollectionsUpdateSchema = BaseSchema.extend({
   body: BaseIdSchema.extend({
     name: z.string().optional(),
     description: z.string().nullish(),
-    data: ProsemirrorSchema.nullish(),
-    icon: zodEnumFromObjectKeys(IconLibrary.mapping).nullish(),
+    data: ProsemirrorSchema({ allowEmpty: true }).nullish(),
+    icon: zodIconType().nullish(),
     permission: z.nativeEnum(CollectionPermission).nullish(),
     color: z
       .string()
@@ -195,6 +178,8 @@ export type CollectionsUpdateReq = z.infer<typeof CollectionsUpdateSchema>;
 export const CollectionsListSchema = BaseSchema.extend({
   body: z.object({
     includeListOnly: z.boolean().default(false),
+    /** Collection statuses to include in results */
+    statusFilter: z.nativeEnum(CollectionStatusFilter).array().optional(),
   }),
 });
 
@@ -205,6 +190,22 @@ export const CollectionsDeleteSchema = BaseSchema.extend({
 });
 
 export type CollectionsDeleteReq = z.infer<typeof CollectionsDeleteSchema>;
+
+export const CollectionsArchiveSchema = BaseSchema.extend({
+  body: BaseIdSchema,
+});
+
+export type CollectionsArchiveReq = z.infer<typeof CollectionsArchiveSchema>;
+
+export const CollectionsRestoreSchema = BaseSchema.extend({
+  body: BaseIdSchema,
+});
+
+export type CollectionsRestoreReq = z.infer<typeof CollectionsRestoreSchema>;
+
+export const CollectionsArchivedSchema = BaseSchema;
+
+export type CollectionsArchivedReq = z.infer<typeof CollectionsArchivedSchema>;
 
 export const CollectionsMoveSchema = BaseSchema.extend({
   body: BaseIdSchema.extend({

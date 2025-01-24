@@ -14,6 +14,7 @@ import InputSelectPermission from "~/components/InputSelectPermission";
 import LoadingIndicator from "~/components/LoadingIndicator";
 import Text from "~/components/Text";
 import useStores from "~/hooks/useStores";
+import { EmptySelectValue } from "~/types";
 import { uploadFile } from "~/utils/files";
 
 type Props = {
@@ -104,8 +105,8 @@ function DropToImport({ disabled, onSubmit, children, format }: Props) {
       <div>
         <InputSelectPermission
           value={permission}
-          onChange={(value: CollectionPermission) => {
-            setPermission(value);
+          onChange={(value: CollectionPermission | typeof EmptySelectValue) => {
+            setPermission(value === EmptySelectValue ? null : value);
           }}
         />
         <Text as="span" type="secondary">
@@ -137,7 +138,7 @@ const DropzoneContainer = styled.div<{
 }>`
   background: ${(props) =>
     props.$isDragActive
-      ? props.theme.secondaryBackground
+      ? props.theme.backgroundSecondary
       : props.theme.background};
   border-radius: 8px;
   border: 1px dashed ${s("divider")};
@@ -148,7 +149,7 @@ const DropzoneContainer = styled.div<{
   opacity: ${(props) => (props.$disabled ? 0.5 : 1)};
 
   &:hover {
-    background: ${s("secondaryBackground")};
+    background: ${s("backgroundSecondary")};
   }
 `;
 

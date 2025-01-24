@@ -14,6 +14,7 @@ import type {
 import {
   ExportContentType,
   FileOperationFormat,
+  NavigationNodeType,
   NotificationEventType,
 } from "@shared/types";
 import Storage from "@shared/utils/Storage";
@@ -27,9 +28,10 @@ import { settingsPath } from "~/utils/routeHelpers";
 import Collection from "./Collection";
 import Notification from "./Notification";
 import View from "./View";
-import ParanoidModel from "./base/ParanoidModel";
+import ArchivableModel from "./base/ArchivableModel";
 import Field from "./decorators/Field";
 import Relation from "./decorators/Relation";
+import { Searchable } from "./interfaces/Searchable";
 
 type SaveOptions = JSONObject & {
   publish?: boolean;
@@ -37,7 +39,7 @@ type SaveOptions = JSONObject & {
   autosave?: boolean;
 };
 
-export default class Document extends ParanoidModel {
+export default class Document extends ArchivableModel implements Searchable {
   static modelName = "Document";
 
   constructor(fields: Record<string, any>, store: DocumentsStore) {
@@ -64,10 +66,6 @@ export default class Document extends ParanoidModel {
 
   store: DocumentsStore;
 
-  @Field
-  @observable
-  id: string;
-
   @observable.shallow
   data: ProsemirrorData;
 
@@ -87,6 +85,11 @@ export default class Document extends ParanoidModel {
     /** The name of the file this document was imported from. */
     fileName?: string;
   };
+
+  @computed
+  get searchContent(): string {
+    return this.title;
+  }
 
   /**
    * The name of the original data source, if imported.
@@ -116,7 +119,7 @@ export default class Document extends ParanoidModel {
   collectionId?: string | null;
 
   /**
-   * The comment that this comment is a reply to.
+   * The collection that this document belongs to.
    */
   @Relation(() => Collection, { onDelete: "cascade" })
   collection?: Collection;
@@ -129,11 +132,18 @@ export default class Document extends ParanoidModel {
   title: string;
 
   /**
-   * An emoji to use as the document icon.
+   * An icon (or) emoji to use as the document icon.
    */
   @Field
   @observable
-  emoji: string | undefined | null;
+  icon?: string | null;
+
+  /**
+   * The color to use for the document icon.
+   */
+  @Field
+  @observable
+  color?: string | null;
 
   /**
    * Whether this is a template.
@@ -168,6 +178,12 @@ export default class Document extends ParanoidModel {
   @observable
   parentDocumentId: string | undefined;
 
+  /**
+   * Parent document that this is a child of, if any.
+   */
+  @Relation(() => Document, { onArchive: "cascade" })
+  parentDocument?: Document;
+
   @observable
   collaboratorIds: string[];
 
@@ -179,9 +195,6 @@ export default class Document extends ParanoidModel {
 
   @observable
   publishedAt: string | undefined;
-
-  @observable
-  archivedAt: string;
 
   /**
    * @deprecated Use path instead
@@ -243,7 +256,8 @@ export default class Document extends ParanoidModel {
 
   @computed
   get path(): string {
-    const prefix = this.template ? settingsPath("templates") : "/doc";
+    const prefix =
+      this.template && !this.isDeleted ? settingsPath("templates") : "/doc";
 
     if (!this.title) {
       return `${prefix}/untitled-${this.urlId}`;
@@ -295,6 +309,24 @@ export default class Document extends ParanoidModel {
   get isSubscribed(): boolean {
     return !!this.store.rootStore.subscriptions.orderedData.find(
       (subscription) => subscription.documentId === this.id
+    );
+  }
+
+  /**
+   * Returns whether the document is currently publicly shared, taking into account
+   * the document's and team's sharing settings.
+   *
+   * @returns True if the document is publicly shared, false otherwise.
+   */
+  get isPubliclyShared(): boolean {
+    const { shares, auth } = this.store.rootStore;
+    const share = shares.getByDocumentId(this.id);
+    const sharedParent = shares.getByDocumentParents(this.id);
+
+    return !!(
+      auth.team?.sharing !== false &&
+      this.collection?.sharing !== false &&
+      (share?.published || (sharedParent?.published && !this.isDraft))
     );
   }
 
@@ -369,9 +401,31 @@ export default class Document extends ParanoidModel {
     return floor((this.tasks.completed / this.tasks.total) * 100);
   }
 
+  /**
+   * Returns the path to the document, using the collection structure if available.
+   * otherwise if we're viewing a shared document we can iterate up the parentDocument tree.
+   *
+   * @returns path to the document
+   */
   @computed
   get pathTo() {
-    return this.collection?.pathToDocument(this.id) ?? [];
+    if (this.collection?.documents) {
+      return this.collection.pathToDocument(this.id);
+    }
+
+    // find root parent document we have access to
+    const path: Document[] = [this];
+
+    while (path[0]?.parentDocument) {
+      path.unshift(path[0].parentDocument);
+    }
+
+    return path.map((item) => item.asNavigationNode);
+  }
+
+  @computed
+  get isWorkspaceTemplate() {
+    return this.template && !this.collectionId;
   }
 
   get titleWithDefault(): string {
@@ -483,7 +537,13 @@ export default class Document extends ParanoidModel {
   };
 
   @action
-  templatize = () => this.store.templatize(this.id);
+  templatize = ({
+    collectionId,
+    publish,
+  }: {
+    collectionId: string | null;
+    publish: boolean;
+  }) => this.store.templatize({ id: this.id, collectionId, publish });
 
   @action
   save = async (
@@ -510,13 +570,17 @@ export default class Document extends ParanoidModel {
     }
   };
 
-  move = (collectionId: string, parentDocumentId?: string | undefined) =>
-    this.store.move(this.id, collectionId, parentDocumentId);
+  move = (options: {
+    collectionId?: string | null;
+    parentDocumentId?: string;
+  }) => this.store.move({ documentId: this.id, ...options });
 
   duplicate = (options?: {
     title?: string;
     publish?: boolean;
     recursive?: boolean;
+    collectionId?: string | null;
+    parentDocumentId?: string;
   }) => this.store.duplicate(this, options);
 
   /**
@@ -553,15 +617,19 @@ export default class Document extends ParanoidModel {
   @computed
   get childDocuments() {
     return this.store.orderedData.filter(
-      (doc) => doc.parentDocumentId === this.id
+      (doc) =>
+        doc.parentDocumentId === this.id && this.isActive === doc.isActive
     );
   }
 
   @computed
   get asNavigationNode(): NavigationNode {
     return {
+      type: NavigationNodeType.Document,
       id: this.id,
       title: this.title,
+      color: this.color ?? undefined,
+      icon: this.icon ?? undefined,
       children: this.childDocuments.map((doc) => doc.asNavigationNode),
       url: this.url,
       isDraft: this.isDraft,
@@ -580,7 +648,9 @@ export default class Document extends ParanoidModel {
       nodes: extensionManager.nodes,
       marks: extensionManager.marks,
     });
-    const markdown = serializer.serialize(Node.fromJSON(schema, this.data));
+    const markdown = serializer.serialize(Node.fromJSON(schema, this.data), {
+      softBreak: true,
+    });
     return markdown;
   };
 

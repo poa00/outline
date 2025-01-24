@@ -1,6 +1,8 @@
 import * as React from "react";
 import { useTranslation } from "react-i18next";
+import styled from "styled-components";
 import { $Diff } from "utility-types";
+import { s } from "@shared/styles";
 import { CollectionPermission } from "@shared/types";
 import { EmptySelectValue } from "~/types";
 import InputSelect, { Props, Option, InputSelectRef } from "./InputSelect";
@@ -19,19 +21,20 @@ function InputSelectPermission(
   const { t } = useTranslation();
 
   return (
-    <InputSelect
+    <Select
       ref={ref}
       label={t("Permission")}
       options={[
-        {
-          label: t("Can edit"),
-          value: CollectionPermission.ReadWrite,
-        },
         {
           label: t("View only"),
           value: CollectionPermission.Read,
         },
         {
+          label: t("Can edit"),
+          value: CollectionPermission.ReadWrite,
+        },
+        {
+          divider: true,
           label: t("No access"),
           value: EmptySelectValue,
         },
@@ -43,5 +46,9 @@ function InputSelectPermission(
     />
   );
 }
+
+const Select = styled(InputSelect)`
+  color: ${s("textSecondary")};
+`;
 
 export default React.forwardRef(InputSelectPermission);
